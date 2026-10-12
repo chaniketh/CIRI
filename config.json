@@ -1,5 +1,5 @@
 {
-  "uno_port": "COM9",
+  "uno_port": "/dev/cu.usbmodem1201",
   "calibration_file": "calibration.uno.json",
   "output_dir": "runs",
   "material": "pending setup",
@@ -28,17 +28,19 @@
     "max_motor_path_deg": null
   },
   "motor": {
-    "port": "COM6",
+    "port": "/dev/cu.usbserial-FTB8HQU7",
     "id": 1,
     "baudrate": 57600,
     "model": "XL430-W250",
     "rpm": 15.0,
     "cw_sign": 1,
     "direction_verified": true,
-    "mm_per_motor_rev": null
+    "mm_per_motor_rev": null,
+    "direction_verification_note": "User observed sign -1 unwinding the spool on 2026-10-12; reversed to +1 for pulling. Confirm unloaded with current spool routing."
   },
-  "load_cell_nominal_capacity_kg": 1,
+  "load_cell_nominal_capacity_kg": 5,
   "angle_definition": "Pending installed needle angle measured from rail",
   "experiment_type": "rigid_needle_pull",
-  "engagement_level": null
+  "engagement_level": null,
+  "uno_serial_number": "14531303334351E0C1C2"
 }

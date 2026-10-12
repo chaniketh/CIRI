@@ -1,8 +1,11 @@
 {
-  "counts_per_N": 73375.585937,
-  "counts_per_gram": 719.568664,
-  "offset_counts": 22706.33,
+  "counts_per_N": -46311.15625,
+  "counts_per_gram": -454.157287,
+  "offset_counts": -83582.73,
   "force_model": "unknown",
   "quality_status": "uno_verification_reported",
-  "setup_description": "User-supplied verified calibration for the existing load cell and HX711. Re-tare unloaded before every test. Recalibrate if the sensor, wiring, mounting, or load path changes."
+  "setup_description": "User-reported verified standalone Uno calibration for the new 5 kg load cell. Negative sensitivity matches calibration wiring polarity. Re-tare in the final test orientation.",
+  "load_cell_nominal_capacity_kg": 5,
+  "created_utc": "2026-10-12T18:17:19.041455+00:00",
+  "verification_note": "User supplied five verification samples near 1000 g (9.7995\u20139.8376 N). Return to zero after unloading still needs confirmation; force direction and fixture load-path validity remain unconfirmed."
 }
