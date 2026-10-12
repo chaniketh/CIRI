@@ -49,7 +49,7 @@ def main():
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--direction', choices=['cw', 'ccw'], default='cw')
     args = parser.parse_args()
-    config = json.loads(Path(args.config).read_text())
+    config = json.loads(Path(args.config).read_text(encoding='utf-8'))
     jog(config, args.direction)
 
 

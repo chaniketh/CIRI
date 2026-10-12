@@ -19,7 +19,7 @@ def number(value):
 
 
 def read_angles(path):
-    with Path(path).open() as stream:
+    with Path(path).open(encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     if not rows:
         raise ValueError("No angle measurements")
@@ -88,8 +88,8 @@ def main():
     if not math.isfinite(args.max_angle_gap_s) or args.max_angle_gap_s <= 0:
         raise ValueError("max-angle-gap-s must be positive")
     root = Path(args.run_dir)
-    meta = json.loads((root/"metadata.json").read_text())
-    with (root/"samples.csv").open() as stream:
+    meta = json.loads((root/"metadata.json").read_text(encoding='utf-8'))
+    with (root/"samples.csv").open(encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     if not rows:
         raise ValueError("Run contains no samples")
@@ -112,7 +112,7 @@ def main():
                 row["joint_angle_deg"] = measured.get("joint_angle_deg")
                 row["angle_phase"] = measured.get("phase", "")
                 row["angle_event"] = measured.get("event", "")
-    with (root/"analyzed.csv").open("w", newline="") as stream:
+    with (root/"analyzed.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
@@ -133,7 +133,7 @@ def main():
     for key in ("needle_transverse_est_N",):
         vals = [number(r.get(key)) for r in force_rows if number(r.get(key)) is not None]
         summary["peak_abs_"+key] = max(map(abs, vals)) if vals else None
-    (root/"summary.json").write_text(json.dumps(summary, indent=2))
+    (root/"summary.json").write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))
     if args.plot:
         import matplotlib

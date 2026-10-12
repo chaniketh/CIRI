@@ -69,7 +69,7 @@ class WebRigTests(unittest.TestCase):
         self.start()
         self.rig.demo = False
         self.rig.device = type('Device', (), {'close': lambda self: None})()
-        with patch('web_rig.get_sample', return_value=(1,1000,120000,False)):
+        with patch('web_rig.get_sample', side_effect=[(1,1000,120000,False), None]):
             self.rig.poll()
         self.assertEqual(self.rig.state['phase'], 'running')
         self.assertAlmostEqual(self.rig.state['force_N'], 2.0)
@@ -77,6 +77,17 @@ class WebRigTests(unittest.TestCase):
         self.rig.start_time = time.monotonic()-10
         self.rig.poll()
         self.assertEqual(self.rig.meta['stop_reason'], 'duration_complete')
+
+    def test_poll_drains_whole_serial_backlog(self):
+        self.rig.config['limits']['max_abs_sensor_force_N'] = None
+        self.start()
+        self.rig.demo = False
+        self.rig.device = type('Device', (), {'close': lambda self: None})()
+        backlog = [(i, 1000+11*i, 120000+i, False) for i in range(100)]
+        before = self.rig.meta['samples']
+        with patch('web_rig.get_sample', side_effect=backlog + [None]):
+            self.rig.poll()
+        self.assertEqual(self.rig.meta['samples'] - before, 100)
 
     def test_time_limit_and_tare_during_run(self):
         self.start()

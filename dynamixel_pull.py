@@ -101,6 +101,25 @@ class DynamixelPull:
                 "motor_velocity_rpm": velocity, "motor_current_mA": current, "motor_load_est_percent": load,
                 "cart_displacement_est_mm": displacement_deg / 360 * mm_rev if mm_rev else None}
 
+    def torque_off(self):
+        """Standalone: zero velocity and disable torque, without the start-of-test checks."""
+        try:
+            if not self.port.openPort():
+                raise RuntimeError("Cannot open Dynamixel port")
+            if not self.port.setBaudRate(self.config["baudrate"]):
+                raise RuntimeError("Cannot set Dynamixel baud rate")
+            errors = []
+            for address, size, value in ((104, 4, 0), (64, 1, 0)):
+                try:
+                    self.write(address, size, value)
+                except Exception as exc:
+                    errors.append(str(exc))
+            if errors:
+                raise RuntimeError("; ".join(errors))
+        finally:
+            self.armed = False
+            self.port.closePort()
+
     def stop(self):
         # Independent attempts: torque-off is still attempted if zero-velocity fails.
         errors = []

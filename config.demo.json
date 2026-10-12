@@ -28,7 +28,7 @@
     "max_motor_path_deg": 15.0
   },
   "motor": {
-    "port": "/dev/cu.usbserial_REPLACE",
+    "port": "COM6",
     "id": 1,
     "baudrate": 57600,
     "model": "XL430-W250",

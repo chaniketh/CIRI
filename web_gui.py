@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local-only USB rig GUI: python web_gui.py --config config.json."""
 import argparse
+import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -20,7 +21,7 @@ def saved_runs(root):
         if not path.is_dir() or not (path/'metadata.json').exists():
             continue
         try:
-            meta = json.loads((path/'metadata.json').read_text())
+            meta = json.loads((path/'metadata.json').read_text(encoding='utf-8'))
             cfg = meta['config']
             result.append({'id': path.name, 'material': cfg.get('material', ''),
                            'angle': cfg.get('geometry', {}).get('needle_angle_deg'),
@@ -32,6 +33,52 @@ def saved_runs(root):
         if len(result) >= 100:
             break
     return result
+
+
+def load_run(root, ident, max_points=2500):
+    # Time = Uno sample clock (true sample timing); motor columns are host-stamped telemetry.
+    folder = (root/ident).resolve()
+    if folder.parent != root.resolve() or not (folder/'samples.csv').is_file():
+        return None
+    meta = json.loads((folder/'metadata.json').read_text(encoding='utf-8'))
+    cfg = meta['config']
+    with (folder/'samples.csv').open(encoding='utf-8') as stream:
+        rows = list(csv.DictReader(stream))
+
+    def num(row, key):
+        try:
+            return float(row[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+    t = [num(r, 'uno_elapsed_s') for r in rows]
+    force = [num(r, 'sensor_force_N') for r in rows]
+    speed = [num(r, 'motor_velocity_rpm') for r in rows]
+    pairs = [(a, b) for a, b in zip(t, force) if a is not None and b is not None]
+    if not pairs:
+        return {'id': ident, 'samples': 0, 'force': [], 'speed': []}
+    t0 = pairs[0][0]
+    step = max(1, len(rows)//max_points)
+    force_pts = [[a-t0, b] for a, b in pairs[::step]]
+    table = []
+    tstep = max(1, len(rows)//20000)
+    for row, a, b, s in list(zip(rows, t, force, speed))[::tstep]:
+        if a is not None and b is not None:
+            table.append([round(a-t0, 4), num(row, 'uno_sequence'), num(row, 'raw_counts'), b, s,
+                          num(row, 'motor_displacement_deg')])
+    speed_pts = [[a-t0, s] for a, s in zip(t, speed) if a is not None and s is not None][::step]
+    span = pairs[-1][0]-t0
+    host = [v for v in (num(r, 't_s') for r in rows) if v is not None]
+    peak_i = max(range(len(pairs)), key=lambda i: abs(pairs[i][1]))
+    mean = sum(abs(b) for _, b in pairs)/len(pairs)
+    return {'id': ident, 'material': cfg.get('material'), 'trial': cfg.get('trial_id'),
+            'angle': cfg.get('geometry', {}).get('needle_angle_deg'), 'insertion': cfg.get('engagement_level'),
+            'outcome': meta.get('outcome'), 'reason': meta.get('stop_reason'),
+            'notes': meta.get('notes') or cfg.get('notes'),
+            'demo': meta.get('demo', False), 'samples': len(pairs), 'duration_s': span,
+            'host_duration_s': (host[-1]-host[0]) if host else None,
+            'rate_hz': (len(pairs)-1)/span if span > 0 else None,
+            'peak_N': abs(pairs[peak_i][1]), 'peak_t_s': pairs[peak_i][0]-t0, 'mean_abs_N': mean,
+            'force': force_pts, 'speed': speed_pts, 'table': table}
 
 
 def make_handler(rig, token, port):
@@ -63,6 +110,12 @@ def make_handler(rig, token, port):
                 self.send(200, rig.snapshot())
             elif path == '/api/runs':
                 self.send(200, saved_runs(rig.root))
+            elif path.startswith('/api/run/'):
+                try:
+                    result = load_run(rig.root, path.split('/')[-1])
+                except (ValueError, KeyError, OSError):
+                    result = None
+                self.send(200 if result else 404, result or {'error': 'Run not found'})
             elif path.startswith('/api/download/'):
                 ident = path.split('/')[-1]
                 root = (rig.root/ident).resolve()
@@ -77,7 +130,7 @@ def make_handler(rig, token, port):
                 self.send(200, archive.getvalue(), 'application/zip', ident+'.zip')
             elif path in ('/', '/app.js', '/style.css'):
                 name = 'index.html' if path == '/' else path[1:]
-                body = (web/name).read_text()
+                body = (web/name).read_text(encoding='utf-8')
                 if name == 'index.html':
                     body = body.replace('__TOKEN__', token)
                 mime = {'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8',
@@ -90,7 +143,7 @@ def make_handler(rig, token, port):
             if self.headers.get('Origin') not in allowed_origins or self.headers.get('X-Rig-Token') != token:
                 self.send(403, {'error': 'Request must come from the local rig page'}); return
             path = urlparse(self.path).path
-            if path not in ('/api/tare', '/api/start', '/api/finish', '/api/speed'):
+            if path not in ('/api/tare', '/api/start', '/api/finish', '/api/speed', '/api/torque_off'):
                 self.send(404, {'error': 'Unknown action'}); return
             try:
                 size = int(self.headers.get('Content-Length', '0'))

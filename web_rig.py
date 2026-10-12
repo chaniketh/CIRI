@@ -21,10 +21,10 @@ def utc():
 class Rig:
     def __init__(self, config_path, demo=False, motor_factory=DynamixelPull):
         self.config_path = Path(config_path).resolve()
-        self.config = json.loads(self.config_path.read_text())
+        self.config = json.loads(self.config_path.read_text(encoding='utf-8'))
         validate(self.config, pull=not demo)
         self.demo = demo
-        self.cal = json.loads((self.config_path.parent / self.config['calibration_file']).read_text())
+        self.cal = json.loads((self.config_path.parent / self.config['calibration_file']).read_text(encoding='utf-8'))
         if not finite(self.cal.get('counts_per_N')) or abs(self.cal['counts_per_N']) < 1 or not finite(self.cal.get('offset_counts')):
             raise ValueError('Invalid calibration constants')
         if self.cal.get('quality_status') == 'rejected' or calibration_quality(self.cal)['issues']:
@@ -63,7 +63,7 @@ class Rig:
             return result
 
     def enqueue(self, action, payload):
-        if action not in ('tare', 'start', 'finish', 'speed'):
+        if action not in ('tare', 'start', 'finish', 'speed', 'torque_off'):
             raise ValueError('Unknown action')
         self.commands.put_nowait((action, payload))
 
@@ -137,7 +137,7 @@ class Rig:
                      'pull': True, 'created_utc': utc(), 'status': 'running', 'samples': 0,
                      'tare_noise_counts': getattr(self, 'tare_noise', None), 'events': [],
                      'stop_reason': None, 'time_reference': 'host monotonic receive time; motor telemetry asynchronous'}
-        self.file = (self.run_dir/'samples.csv').open('w', newline='')
+        self.file = (self.run_dir/'samples.csv').open('w', newline='', encoding='utf-8')
         self.writer = csv.DictWriter(self.file, fieldnames=FIELDS)
         self.writer.writeheader()
         self.file.flush()
@@ -189,7 +189,7 @@ class Rig:
         if self.run_dir and self.meta:
             target = self.run_dir/'metadata.json'
             temp = target.with_suffix('.tmp')
-            temp.write_text(json.dumps(self.meta, indent=2))
+            temp.write_text(json.dumps(self.meta, indent=2), encoding='utf-8')
             temp.replace(target)
 
     def stop(self, reason):
@@ -221,6 +221,21 @@ class Rig:
         self.state.update(phase='idle', tared=False, last_run=self.run_dir.name,
                           message='Test saved. Tare before the next test.')
         self.run_dir = self.meta = None
+
+    def torque_off(self, values):
+        if self.state['phase'] in ('taring', 'starting'):
+            raise ValueError('Wait for the current operation to finish')
+        if self.motor:
+            self.stop('torque_disabled_by_user')  # zeroes velocity, then disables torque
+        elif self.demo:
+            self.state['message'] = 'Demo: no motor to disable.'
+        else:
+            try:
+                self.motor_factory(self.config['motor']).torque_off()
+            except Exception as exc:
+                self.state['message'] = 'Torque disable FAILED: ' + str(exc) + '. Cut motor power if needed.'
+                return
+            self.state['message'] = 'Motor torque disabled; cart can be moved by hand.'
 
     def speed(self, values):
         if self.state['phase'] in ('taring', 'starting', 'stopped'):
@@ -270,11 +285,30 @@ class Rig:
                       round(self.cal['offset_counts']+force*self.cal['counts_per_N']), False)
             self.demo_seq += 1
         else:
-            sample = get_sample(self.device)
-        if sample is None:
-            if self.last_sample and time.monotonic()-self.last_sample > self.config['limits']['sensor_stale_s']:
-                raise RuntimeError('Sensor data stale; check Uno connection')
+            self.drain_sensor()
             return
+        self.handle_sample(sample)
+
+    def drain_sensor(self):
+        # The Uno sends ~88 samples/s; take everything waiting each pass so the serial
+        # buffer never backs up (a backlog delays and truncates the log). Capped so
+        # heartbeat, motor telemetry and commands are still serviced between batches.
+        got = 0
+        for _ in range(512):
+            sample = get_sample(self.device)
+            if sample is None:
+                if b"\n" in getattr(self.device, "_needle_rx_buffer", b""):
+                    continue  # dropped a resync fragment; complete lines remain
+                break
+            got += 1
+            self.handle_sample(sample)
+        if self.file:
+            self.file.flush()
+        if not got and self.last_sample and time.monotonic()-self.last_sample > self.config['limits']['sensor_stale_s']:
+            raise RuntimeError('Sensor data stale; check Uno connection')
+
+    def handle_sample(self, sample):
+        running = self.state['phase'] == 'running'
         seq, ms, raw, saturated = sample
         if self.sequence is not None and seq != (self.sequence+1)&0xFFFFFFFF:
             raise RuntimeError('Uno reset or missing sample')
@@ -308,12 +342,14 @@ class Rig:
             if self.motor_data:
                 row['motor_age_s'] = rx-self.motor_data['motor_rx_monotonic_s']
             self.writer.writerow(row)
-            self.file.flush()
+            if self.demo:
+                self.file.flush()
             self.meta['samples'] += 1
         if saturated:
             raise RuntimeError('HX711 ADC saturation')
         if running and self.config['limits'].get('max_abs_sensor_force_N') is not None and abs(force) >= self.config['limits']['max_abs_sensor_force_N']:
             self.stop('sensor_force_limit')
+
 
     def failure(self, exc):
         if self.motor or self.file:

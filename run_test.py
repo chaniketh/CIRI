@@ -23,7 +23,7 @@ FIELDS = ["t_s", "host_utc", "host_monotonic_s", "uno_sequence", "uno_ms",
 
 
 def load_json(path):
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
 def positive(value, name):
@@ -181,11 +181,11 @@ def calibration(args):
     output = Path(args.output)
     if quality["issues"]:
         output = output.with_name(output.stem + ".rejected_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ") + output.suffix)
-        with output.open("x") as stream:
+        with output.open("x", encoding="utf-8") as stream:
             json.dump(payload, stream, indent=2)
         raise ValueError("Calibration rejected: " + "; ".join(quality["issues"]) +
                          f". Measurements saved for diagnosis in {output}; no usable calibration written.")
-    with output.open("x") as stream:
+    with output.open("x", encoding="utf-8") as stream:
         json.dump(payload, stream, indent=2)
     print(f"Saved {output}; max fit residual {payload['max_fit_residual_N']:.4g} N")
     print("Validate with an independent known force, unloading, and the real fixture before use.")
@@ -233,7 +233,7 @@ def record(args):
                 "time_reference": "t_s is host monotonic receive time from first sample; Uno time is separate"}
     metadata_path = output / "metadata.json"
     def save():
-        metadata_path.write_text(json.dumps(metadata, indent=2))
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     save()
     device = motor = None
     reason = "duration_complete"
@@ -265,7 +265,7 @@ def record(args):
         run_start = time.monotonic()
         metadata["status"] = "recording"
         save()
-        with (output / "samples.csv").open("w", newline="") as stream:
+        with (output / "samples.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream, fieldnames=FIELDS)
             writer.writeheader()
             while True:
