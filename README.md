@@ -13,8 +13,8 @@ The setup includes your existing verified load-cell calibration. Recalibration i
 On macOS, install Python 3 if `python3 --version` does not work. Open Terminal in this repository:
 
 ```sh
-git clone https://github.com/chaniketh/CIRI-.git
-cd CIRI-
+git clone https://github.com/chaniketh/CIRI.git
+cd CIRI
 ./setup.sh
 ```
 
@@ -32,8 +32,8 @@ No activation is required. Dependencies: pyserial, Dynamixel SDK, matplotlib.
 Install Python 3, Git, and Arduino IDE. Open PowerShell and run:
 
 ```powershell
-git clone https://github.com/chaniketh/CIRI-.git
-cd CIRI-
+git clone https://github.com/chaniketh/CIRI.git
+cd CIRI
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 if (!(Test-Path config.json)) { Copy-Item config.example.json config.json }
