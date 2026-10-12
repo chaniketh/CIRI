@@ -37,7 +37,7 @@ def style():
     })
 
 
-def load_runs(root, material, engagement, min_samples):
+def load_runs(root, material, engagement, min_samples, outcomes=None):
     runs, skipped = [], []
     for folder in sorted(Path(root).iterdir()):
         meta_path, csv_path = folder / "metadata.json", folder / "samples.csv"
@@ -46,32 +46,46 @@ def load_runs(root, material, engagement, min_samples):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         cfg = meta["config"]
         if meta.get("demo") or meta.get("status") != "finished" or \
-                not str(meta.get("stop_reason", "")).startswith(GOOD_STOPS):
+                meta.get("stop_reason") not in GOOD_STOPS:
             skipped.append((folder.name, "not a completed real run")); continue
         if material and cfg.get("material") != material:
             continue
         if engagement and cfg.get("engagement_level") != engagement:
             continue
+        if outcomes and meta.get("outcome") not in outcomes:
+            continue
         data = pd.read_csv(csv_path)
+        required = {"sensor_force_N", "t_s", "uno_elapsed_s", "motor_displacement_deg", "motor_rx_monotonic_s"}
+        if not required.issubset(data.columns):
+            skipped.append((folder.name, "missing required sample columns")); continue
+        if "saturated" in data and pd.to_numeric(data["saturated"], errors="coerce").fillna(1).ne(0).any():
+            skipped.append((folder.name, "ADC saturation or invalid saturation flag")); continue
+        for column in required:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+        if not np.isfinite(data[["sensor_force_N", "t_s", "uno_elapsed_s"]].to_numpy()).all():
+            skipped.append((folder.name, "non-finite force or timestamps")); continue
+        if len(data) < 2 or any((data[column].diff().iloc[1:] <= 0).any() for column in ("uno_elapsed_s", "t_s")):
+            skipped.append((folder.name, "timestamps must increase")); continue
         angle = cfg["geometry"].get("needle_angle_deg")
         if len(data) < min_samples or angle is None:
             skipped.append((folder.name, f"{len(data)} samples, angle {angle}")); continue
+        if not np.isfinite(float(angle)):
+            skipped.append((folder.name, "non-finite needle angle")); continue
         runs.append({"id": folder.name, "angle": float(angle), "trial": cfg.get("trial_id"),
+                     "material": cfg.get("material"), "engagement": cfg.get("engagement_level"),
+                     "outcome": meta.get("outcome"), "stop_reason": meta.get("stop_reason"), "notes": meta.get("notes", ""),
                      "mm_per_rev": cfg["motor"].get("mm_per_motor_rev"), "data": data})
     return runs, skipped
 
 
 def prepare(runs, time_axis):
-    # Tension reads negative on this load cell; plot pull force as positive.
-    high = max(r["data"]["sensor_force_N"].max() for r in runs)
-    low = min(r["data"]["sensor_force_N"].min() for r in runs)
-    sign = -1.0 if abs(low) > abs(high) else 1.0
+    # Compare force magnitude without assuming a shared wiring polarity.
     warnings = []
     for r in runs:
         d = r["data"]
         t = (d["uno_elapsed_s"] if time_axis == "uno" else d["t_s"]).to_numpy(float)
         t = t - t[0]
-        f = sign * d["sensor_force_N"].to_numpy(float)
+        f = np.abs(d["sensor_force_N"].to_numpy(float))
         host_span = d["t_s"].iloc[-1] - d["t_s"].iloc[0]
         uno_span = d["uno_elapsed_s"].iloc[-1] - d["uno_elapsed_s"].iloc[0]
         if host_span > 0 and abs(uno_span - host_span) / host_span > 0.1:
@@ -90,6 +104,8 @@ def prepare(runs, time_axis):
 def summary_panel(ax, table, column, angles, colors, ylabel, title, rng):
     for i, angle in enumerate(angles):
         v = table.loc[table.angle == angle, column].dropna().to_numpy(float)
+        if not len(v):
+            continue
         # Trial values sit left of the column centre, mean +/- SD to the right: nothing overlaps.
         x = i - 0.2 + rng.uniform(-0.06, 0.06, len(v))
         ax.scatter(x, v, s=28, color=colors[angle], edgecolor="white", linewidth=0.5, zorder=3)
@@ -109,14 +125,18 @@ def figure(runs, outdir):
     colors = dict(zip(angles, sns.color_palette(PALETTE if len(angles) <= len(PALETTE)
                                                    else sns.color_palette("crest", len(angles)))))
     table = pd.DataFrame([{"angle": r["angle"], "trial": r["trial"], "run": r["id"], "peak_N": r["peak"],
-                           "mean_N": r["mean"], "speed": r["speed"]} for r in runs])
+                           "mean_N": r["mean"], "speed": r["speed"], "material": r["material"],
+                           "engagement": r["engagement"], "outcome": r["outcome"],
+                           "stop_reason": r["stop_reason"], "notes": r["notes"]} for r in runs])
     n = len(angles)
     fig = plt.figure(figsize=(IEEE_WIDTH_IN, 5.9), layout="constrained")
-    grid = fig.add_gridspec(2, max(n, 3), height_ratios=[1.15, 1])
-    top = [fig.add_subplot(grid[0, i]) for i in range(n)]
+    grid = fig.add_gridspec(2, 1, height_ratios=[1.15, 1])
+    top_grid = grid[0].subgridspec(1, n)
+    bottom_grid = grid[1].subgridspec(1, 3)
+    top = [fig.add_subplot(top_grid[0, i]) for i in range(n)]
     tmax = max(r["t"][-1] for r in runs)
     fmax = max(r["f"].max() for r in runs)
-    letters = iter("abcdefghijkl")
+    letters = (chr(97+i) if i < 26 else str(i+1) for i in range(n+3))
     for i, (ax, angle) in enumerate(zip(top, angles)):
         group = [r for r in runs if r["angle"] == angle]
         for r in group:
@@ -125,10 +145,10 @@ def figure(runs, outdir):
         ax.plot(common, np.mean([np.interp(common, r["t"], r["f"]) for r in group], axis=0),
                 color=colors[angle], lw=2.6, solid_capstyle="round")
         ax.set_xlim(0, tmax * 1.02)
-        ax.set_ylim(-0.02 * fmax, fmax * 1.08)
+        ax.set_ylim(0, max(0.05, fmax * 1.08))
         ax.set_xlabel("Time, $t$ (s)")
         if i == 0:
-            ax.set_ylabel("Pull force, $F$ (N)")
+            ax.set_ylabel("Force magnitude, $|F|$ (N)")
         else:
             ax.tick_params(labelleft=False)
         ax.set_title(f"({next(letters)}) $\\theta$ = {angle:g}$^\\circ$", loc="left", fontweight="bold")
@@ -138,10 +158,11 @@ def figure(runs, outdir):
             ("peak_N", "Peak pull force, $F_{\\max}$ (N)", "Peak force"),
             ("mean_N", "Mean pull force, $\\bar{F}$ (N)", "Mean force"),
             ("speed", f"Mean pull speed, $\\bar{{v}}$ ({speed_unit})", "Mean speed"))):
-        ax = fig.add_subplot(grid[1, col])
+        ax = fig.add_subplot(bottom_grid[0, col])
         summary_panel(ax, table, column, angles, colors, ylabel, f"({next(letters)}) {title}", rng)
-        top_limit = table[column].max() * 1.25
-        ax.set_ylim(-0.04 * top_limit, top_limit)
+        maximum = table[column].max()
+        top_limit = max(0.05, maximum * 1.25) if np.isfinite(maximum) else 1
+        ax.set_ylim(0, top_limit)
     handles = [Patch(facecolor=colors[a], label=f"$\\theta$ = {a:g}$^\\circ$ (n = {(table.angle == a).sum()})")
                for a in angles]
     handles += [Line2D([], [], ls="", label="")] * (-len(handles) % 2)  # keep columns of two
@@ -158,12 +179,14 @@ def figure(runs, outdir):
     return table, speed_unit
 
 
-def caption(table, speed_unit):
-    counts = ", ".join(f"{a:g}$^\\circ$ (n = {len(g)})" for a, g in table.groupby("angle"))
-    return ("Pull-test results by needle angle. (a)-(c) Pull force over time; thin lines are individual trials and "
-            "the thick line is the trial mean. (d) Peak pull force, (e) time-averaged pull force and (f) mean pull "
-            f"speed ({speed_unit}); circles are individual trials and diamonds are mean $\\pm$ one standard "
-            f"deviation. Angles: {counts}. Time is the load-cell sample clock.\n")
+def caption(table, speed_unit, time_axis="uno"):
+    counts = ", ".join(f"{a:g} degrees (n = {len(g)})" for a, g in table.groupby("angle"))
+    return ("Pull-test force magnitude by needle angle. Upper panels: individual trials (thin lines) "
+            "and their interpolated mean (thick line). Lower panels: peak magnitude, time-averaged "
+            f"magnitude, and mean motor/pull speed ({speed_unit}); circles show trials, diamonds mean +/- SD. "
+            f"Angles: {counts}. Time axis: {'Uno sample clock' if time_axis == 'uno' else 'PC receive clock'}. "
+            "Finished recordings do not by themselves establish holding success. "
+            "See outcome, stop_reason, and notes in trial_summary.csv.\n")
 
 
 def main():
@@ -173,24 +196,31 @@ def main():
     parser.add_argument("--material")
     parser.add_argument("--engagement", help="on_surface | in_surface | deep_into_surface")
     parser.add_argument("--min-samples", type=int, default=20)
+    parser.add_argument("--outcome", action="append", choices=("held", "slipped", "pullout", "material_damage", "unloaded_check", "not_recorded"), help="Filter recorded outcome; repeat to include more than one")
     parser.add_argument("--time-axis", choices=("uno", "host"), default="uno",
                         help="uno = load-cell clock (default, true sample timing); host = PC receive time")
     args = parser.parse_args()
+    if args.min_samples < 2:
+        parser.error("--min-samples must be at least 2")
     style()
-    runs, skipped = load_runs(args.runs_dir, args.material, args.engagement, args.min_samples)
+    runs, skipped = load_runs(args.runs_dir, args.material, args.engagement, args.min_samples, args.outcome)
     if not runs:
         raise SystemExit("No matching completed runs found")
+    if len({(r["material"], r["engagement"]) for r in runs}) > 1:
+        raise SystemExit("Choose one material and insertion level with --material and --engagement; averaging different setups is not valid")
+    if len({bool(r["mm_per_rev"]) for r in runs}) > 1:
+        raise SystemExit("Selected trials mix calibrated mm/s and uncalibrated rpm; choose trials with consistent displacement calibration")
     warnings = prepare(runs, args.time_axis)
     out = Path(args.out)
     table, unit = figure(runs, out)
-    (out / "caption_suggestion.txt").write_text(caption(table, unit), encoding="utf-8")
+    (out / "caption_suggestion.txt").write_text(caption(table, unit, args.time_axis), encoding="utf-8")
     table.to_csv(out / "trial_summary.csv", index=False)
     print(f"Plotted {len(runs)} runs at {table.angle.nunique()} angles -> {out.resolve()}")
     for name, why in skipped:
         print(f"  skipped {name}: {why}")
     if warnings:
         print(f"WARNING: sensor and host clocks disagree in {len(warnings)} run(s), e.g. {warnings[0]}")
-        print("  Host receive time lags the sensor (serial backlog); time axis uses the sensor clock.")
+        print(f"  Clock mismatch may indicate serial backlog or timestamp problems; selected time axis: {args.time_axis}.")
 
 
 if __name__ == "__main__":

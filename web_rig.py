@@ -294,7 +294,14 @@ class Rig:
         # buffer never backs up (a backlog delays and truncates the log). Capped so
         # heartbeat, motor telemetry and commands are still serviced between batches.
         got = 0
+        deadline = time.monotonic() + 0.04
+        was_running = self.state['phase'] == 'running'
         for _ in range(512):
+            if time.monotonic() >= deadline:
+                break
+            if was_running and time.monotonic()-self.start_time >= self.config['limits']['duration_s']:
+                self.stop('duration_complete')
+                break
             sample = get_sample(self.device)
             if sample is None:
                 if b"\n" in getattr(self.device, "_needle_rx_buffer", b""):
@@ -302,6 +309,8 @@ class Rig:
                 break
             got += 1
             self.handle_sample(sample)
+            if was_running and self.state['phase'] != 'running':
+                break
         if self.file:
             self.file.flush()
         if not got and self.last_sample and time.monotonic()-self.last_sample > self.config['limits']['sensor_stale_s']:

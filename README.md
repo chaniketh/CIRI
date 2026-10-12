@@ -243,3 +243,29 @@ Windows:
 Open http://127.0.0.1:8766/ for simulated data. Demo logs are separate from real tests.
 
 Windows hardware operation has not yet been tested. The logger uses cross-platform Python and pyserial COM-port discovery; verify with the demo and an unloaded hardware test first.
+
+## Daniil branch: saved tests and experiment plots
+
+The Test log now has a saved-test viewer with force/speed graphs, a hover readout, and a data table. Its time axis is the Uno sample clock; motor telemetry has separate PC timestamps. The **Torque off** button stops an active pull or releases the motor so the cart can be moved by hand.
+
+To compare trials at different angles, select one material and insertion level. Example (substitute your exact material name):
+
+macOS/Linux:
+
+```sh
+.venv/bin/python plot_results.py runs --material cork --engagement on_surface --outcome held --out figures/cork_held
+```
+
+Windows:
+
+```powershell
+.\.venv\Scripts\python.exe plot_results.py runs --material cork --engagement on_surface --outcome held --out figures/cork_held
+```
+
+Omit `--outcome held` to compare all accepted finished recordings, including slips or damage. A finished recording is not the same as a successful hold. The output includes PNG/PDF/SVG graphs, `trial_summary.csv` (with outcomes and notes), and a suggested caption. Missing motor data remain missing rather than being reported as zero speed. Force plots show magnitude. Use `--time-axis host` only when you want PC receive time instead of the Uno sample clock.
+
+### Switching to the 5 kg load cell
+
+The bundled calibration constants belong to the original **1 kg cell**. For the new 5 kg cell, recalibration is required once; do not reuse those constants. Use the optional calibration procedure above with known masses appropriate to your fixture, then save the new constants in `calibration.uno.json` and set `load_cell_nominal_capacity_kg` to `5` in `config.json`. Re-upload the normal logging sketch afterward. On subsequent tests with that unchanged cell, only tare unloaded.
+
+`config.json` on this branch contains Daniil's Windows port/direction settings. Check those against your own setup before a real pull. This update preserves those settings and does not invent a 5 kg calibration.
